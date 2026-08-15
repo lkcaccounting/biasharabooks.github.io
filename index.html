@@ -3961,20 +3961,6 @@ const PWA = {
   }
 };
 
-// Register service worker for PWA
-if ('serviceWorker' in navigator) {
-  const swCode = `
-self.addEventListener('install', e => self.skipWaiting());
-self.addEventListener('activate', e => clients.claim());
-self.addEventListener('fetch', e => {
-  if (e.request.mode === 'navigate') {
-    e.respondWith(fetch(e.request).catch(() => caches.match('/')));
-  }
-});`;
-  const blob = new Blob([swCode], {type:'application/javascript'});
-  navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
-}
-
 window.addEventListener('DOMContentLoaded',()=>{App.boot();PWA.init();Offline.init();});
 
 // ── PROTECT SOURCE CODE ──
@@ -4066,35 +4052,15 @@ function installApp() {
   }
 }
 
-// Register service worker for offline support
+// Service worker registered via sw.js (separate file — see instructions)
 if ('serviceWorker' in navigator) {
-  const swCode = `
-    const CACHE = 'lkc-v1';
-    const OFFLINE_URLS = [self.location.pathname];
-    self.addEventListener('install', e => {
-      e.waitUntil(caches.open(CACHE).then(c => c.addAll(OFFLINE_URLS)));
-      self.skipWaiting();
-    });
-    self.addEventListener('activate', e => {
-      e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
-      self.clients.claim();
-    });
-    self.addEventListener('fetch', e => {
-      if (e.request.method !== 'GET') return;
-      if (e.request.url.includes('supabase.co') || e.request.url.includes('groq.com') || e.request.url.includes('googleapis.com')) return;
-      e.respondWith(caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
-        if (res.ok && e.request.url === self.location.origin + self.location.pathname) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => caches.match(OFFLINE_URLS[0]))));
-    });`;
-  const blob = new Blob([swCode], { type: 'application/javascript' });
-  const swUrl = URL.createObjectURL(blob);
-  navigator.serviceWorker.register(swUrl, { scope: './' })
-    .then(() => console.log('Smart Books SW registered'))
-    .catch(e => console.log('SW error:', e));
+  navigator.serviceWorker.register('./sw.js')
+    .then(reg => {
+      console.log('Smart Books SW registered');
+      // Check for updates on every load
+      reg.update();
+    })
+    .catch(e => console.log('SW not found — offline install disabled:', e.message));
 }
 </script>
 </body>
