@@ -760,6 +760,7 @@ const Poller = {
   stop() { if (this._t) { clearInterval(this._t); this._t = null; } },
   async poll() {
     if (!App.cu || App.cu.role !== 'owner') return;
+    if (!navigator.onLine) return; // Silent — no errors when offline
     try {
       const notifs = await SB.select('notifications', '', 'created_at.desc');
       const unread = notifs.filter(n => !String(n.read_by||'').split(',').includes(App.cu.id)).length;
@@ -1169,10 +1170,36 @@ async dashboard() {
       <div class="sc ${low.length?'red':''}"><div class="sc-ico">⚠</div><div class="sc-val">${low.length}</div><div class="sc-lbl">Low Stock</div></div>
       <div class="sc"><div class="sc-ico">📊</div><div class="sc-val">${sales.length}</div><div class="sc-lbl">Total Sales</div></div>`;
     if(low.length) document.getElementById('dAlerts').innerHTML=`<div class="alert a-warn mb">⚠ <strong>Low Stock:</strong> ${low.map(p=>`${p.name}(${p.quantity})`).join(', ')}</div>`;
-    document.getElementById('dRecent').innerHTML=!sales.length?'<div class="empty"><p>No sales yet.</p></div>':sales.slice(0,8).map(s=>`<div class="ri"><div class="rdot sale"></div><div class="ri-meta"><strong>${s.product_name}</strong><span>${s.sold_by}·${App.ago(s.created_at)}·${s.payment_method}</span></div><div class="ri-amt">${App.fmt(s.total)}</div></div>`).join('');
-    document.getElementById('dPay').innerHTML=!Object.keys(payB).length?'<p class="muted sm">No data.</p>':Object.entries(payB).map(([m,v])=>`<div class="fb" style="padding:6px 0;border-bottom:1px solid var(--border)"><span>${App.payIco(m)} ${m}</span><strong>${App.fmt(v)}</strong></div>`).join('');
-    document.getElementById('dLow').innerHTML=!low.length?'<div class="empty" style="padding:14px"><p>All stock OK ✓</p></div>':`<div class="rl">${low.map(p=>`<div class="ri"><div class="rdot low"></div><div class="ri-meta"><strong>${p.name}</strong><span>${p.quantity} left</span></div><span class="bdg bdg-red">${p.quantity}</span></div>`).join('')}</div>`;
-  }catch(e){T.err('Dashboard error: '+e.message);}
+    const recentHTML=!sales.length?'<div class="empty"><p>No sales yet.</p></div>':sales.slice(0,8).map(s=>`<div class="ri"><div class="rdot sale"></div><div class="ri-meta"><strong>${s.product_name}</strong><span>${s.sold_by}·${App.ago(s.created_at)}·${s.payment_method}</span></div><div class="ri-amt">${App.fmt(s.total)}</div></div>`).join('');
+    const payHTML=!Object.keys(payB).length?'<p class="muted sm">No data.</p>':Object.entries(payB).map(([m,v])=>`<div class="fb" style="padding:6px 0;border-bottom:1px solid var(--border)"><span>${App.payIco(m)} ${m}</span><strong>${App.fmt(v)}</strong></div>`).join('');
+    const lowHTML=!low.length?'<div class="empty" style="padding:14px"><p>All stock OK ✓</p></div>':`<div class="rl">${low.map(p=>`<div class="ri"><div class="rdot low"></div><div class="ri-meta"><strong>${p.name}</strong><span>${p.quantity} left</span></div><span class="bdg bdg-red">${p.quantity}</span></div>`).join('')}</div>`;
+    document.getElementById('dRecent').innerHTML=recentHTML;
+    document.getElementById('dPay').innerHTML=payHTML;
+    document.getElementById('dLow').innerHTML=lowHTML;
+    // Cache for offline use
+    try{localStorage.setItem('sb_dash_cache',JSON.stringify({stats:document.getElementById('dStats').innerHTML,recent:recentHTML,pay:payHTML,low:lowHTML}));}catch(ex){}
+  }catch(e){
+    if(!navigator.onLine){
+      // Offline — show cached data from localStorage if available
+      const cached=localStorage.getItem('sb_dash_cache');
+      if(cached){
+        try{
+          const d=JSON.parse(cached);
+          document.getElementById('dStats').innerHTML=d.stats||'';
+          document.getElementById('dRecent').innerHTML=d.recent||'<div class="empty"><p>Connect to internet to load sales.</p></div>';
+          document.getElementById('dPay').innerHTML=d.pay||'<p class="muted sm">No data.</p>';
+          document.getElementById('dLow').innerHTML=d.low||'';
+        }catch(ex){}
+      } else {
+        document.getElementById('dStats').innerHTML='<div class="alert a-warn" style="grid-column:1/-1">📡 Offline — dashboard data will load when you reconnect.</div>';
+        document.getElementById('dRecent').innerHTML='<div class="empty"><p>Connect to internet to view sales.</p></div>';
+        document.getElementById('dPay').innerHTML='<p class="muted sm">Offline.</p>';
+        document.getElementById('dLow').innerHTML='<div class="empty" style="padding:14px"><p>Offline.</p></div>';
+      }
+    } else {
+      T.err('Dashboard error: '+e.message);
+    }
+  }
 },
 
 // ─── SALES ───
@@ -1194,9 +1221,29 @@ async sales() {
     <div class="card"><div class="tw" id="salesTbl"><div class="empty"><div class="spin" style="margin:0 auto"></div></div></div></div>`;
   P._sf={txt:'',pm:'',dt:''};
   try {
+    if(!navigator.onLine){
+      // Offline — show queued sales and last cached sales
+      const queue=Offline.getQueue();
+      const cachedSales=JSON.parse(localStorage.getItem('sb_sales_cache')||'[]');
+      P._sales=cachedSales;
+      const qAlert=document.getElementById('offlineQueueAlert');
+      if(qAlert&&queue.length>0){
+        qAlert.className='alert a-warn mb';
+        qAlert.innerHTML=`📡 <strong>Offline.</strong> ${queue.length} sale${queue.length>1?'s':''} queued to sync: ${queue.map(q=>`${q.sale.quantity}× ${q.sale.product_name} — ${App.fmt(q.sale.total)}`).join(', ')}`;
+        qAlert.classList.remove('hidden');
+      } else if(qAlert){
+        qAlert.className='alert a-info mb';
+        qAlert.textContent='📡 Offline — showing last known sales. New sales will sync when you reconnect.';
+        qAlert.classList.remove('hidden');
+      }
+      P.renderSalesTbl();
+      return;
+    }
     let filter='';
     if(u.role==='sales') filter=`sold_by_id=eq.${u.id}`;
     P._sales=await SB.select('sales', filter, 'created_at.desc');
+    // Cache for offline
+    try{localStorage.setItem('sb_sales_cache',JSON.stringify(P._sales.slice(0,100)));}catch(ex){}
     // Show offline pending queue at top
     const qAlert=document.getElementById('offlineQueueAlert');
     const queue=Offline.getQueue();
@@ -1238,9 +1285,16 @@ renderSalesTbl(){
 
 async newSale(){
   let prods;
-  try{prods=await SB.select('products','active=eq.true&quantity=gt.0');}
-  catch(e){return T.err('Could not load products.');}
-  if(!prods.length) return T.warn('No products in stock. Add products first.');
+  if(!navigator.onLine){
+    // Use cached products when offline
+    const cached=localStorage.getItem('sb_stock_cache');
+    prods=cached?JSON.parse(cached).filter(p=>Number(p.quantity||0)>0):[];
+    if(!prods.length) return T.warn('📡 Offline — no cached products. Connect to internet first, then try again.');
+  } else {
+    try{prods=await SB.select('products','active=eq.true&quantity=gt.0');}
+    catch(e){return T.err('Could not load products.');}
+    if(!prods.length) return T.warn('No products in stock. Add products first.');
+  }
   P._prods=prods; P._selPM='Cash';
   M.open('Record New Sale',`
     <div class="fg"><label>Product</label>
@@ -1719,7 +1773,22 @@ async stock(){
     </div>
     <div class="card"><div class="tw" id="stockTbl"><div class="empty"><div class="spin" style="margin:0 auto"></div></div></div></div>`;
   P._stf={txt:'',st:''};
-  try{P._stProds=await SB.select('products','active=eq.true','name.asc');P.renderStockTbl();}
+  try{
+    if(!navigator.onLine){
+      const cached=JSON.parse(localStorage.getItem('sb_stock_cache')||'[]');
+      if(cached.length){
+        P._stProds=cached;P.renderStockTbl();
+        T.info('📡 Offline — showing cached stock. May not reflect latest changes.');
+      } else {
+        document.getElementById('stockTbl').innerHTML='<div class="empty"><div class="ei">📡</div><p>Offline — no cached stock data.<br>Connect to internet to load stock.</p></div>';
+      }
+      return;
+    }
+    P._stProds=await SB.select('products','active=eq.true','name.asc');
+    // Cache for offline
+    try{localStorage.setItem('sb_stock_cache',JSON.stringify(P._stProds));}catch(ex){}
+    P.renderStockTbl();
+  }
   catch(e){document.getElementById('stockTbl').innerHTML=`<div class="empty"><p>Error: ${e.message}</p></div>`;}
 },
 
@@ -2808,7 +2877,16 @@ async suppliers(){
     P._suppliers = suppliers;
     P._renderSupplierList(suppliers);
     P._renderPurchaseHistory(restocks);
-  } catch(e) { T.err('Error loading suppliers: '+e.message); }
+  } catch(e) {
+    if(!navigator.onLine){
+      const el=document.getElementById('supplierList');
+      if(el) el.innerHTML='<div class="empty"><div class="ei">📡</div><p>Offline — suppliers need internet to load.</p></div>';
+      const el2=document.getElementById('purchaseTbl');
+      if(el2) el2.innerHTML='<div class="empty"><p>Connect to internet to view purchase history.</p></div>';
+    } else {
+      T.err('Error loading suppliers: '+e.message);
+    }
+  }
 },
 
 _suppliers:[],
