@@ -433,6 +433,9 @@ create table if not exists purchase_orders(id text primary key, supplier_id text
     <!-- NORMAL LOGIN -->
     <div id="loginPane">
       <div id="loginErr" class="alert a-err hidden"></div>
+      <div id="offlineLoginNote" class="alert a-warn hidden" style="font-size:12px">
+        📡 You are offline. You can still sign in if you have logged in on this device before.
+      </div>
       <div class="fg"><label>Full Name</label><input type="text" id="lgName" placeholder="Your name" autocomplete="off"/></div>
       <div class="fg"><label>Password</label><input type="password" id="lgPass" placeholder="Your password"/></div>
       <button class="btn btn-p btn-full" onclick="App.login()">Sign In</button>
@@ -911,6 +914,11 @@ const App = {
     document.getElementById('lgBizName').textContent = cfg?.business?.name || 'Smart Books';
     show('loginScreen');
     this.showPane(Auth.isDeviceAuthorized() ? 'loginPane' : 'linkPane');
+    // Show offline warning if no internet
+    const offlineNote = document.getElementById('offlineLoginNote');
+    if (offlineNote && !navigator.onLine) offlineNote.classList.remove('hidden');
+    window.addEventListener('online',  () => offlineNote?.classList.add('hidden'));
+    window.addEventListener('offline', () => offlineNote?.classList.remove('hidden'));
     document.getElementById('lgPass').addEventListener('keyup', e => { if(e.key==='Enter') App.login(); });
     document.getElementById('lgName').addEventListener('keyup', e => { if(e.key==='Enter') document.getElementById('lgPass').focus(); });
   },
@@ -926,16 +934,88 @@ const App = {
     const name = document.getElementById('lgName').value.trim(), pass = document.getElementById('lgPass').value;
     const err = document.getElementById('loginErr');
     if (!name || !pass) { err.textContent = 'Enter your name and password.'; err.classList.remove('hidden'); return; }
+    err.classList.add('hidden');
     setSyncState('busy');
+
+    const passHash = Auth.hash(pass);
+
+    // ── OFFLINE LOGIN: check locally cached users first ──
+    if (!navigator.onLine) {
+      const cached = this._getCachedUsers();
+      if (cached.length) {
+        const user = cached.find(u => u.name.toLowerCase() === name.toLowerCase() && u.password === passHash);
+        if (user) {
+          this.cu = user;
+          sessionStorage.setItem('sb_uid', user.id);
+          setSyncState('ok');
+          T.warn('📡 Offline mode — using cached credentials. Some features need internet.');
+          this.startApp();
+          return;
+        } else {
+          err.textContent = 'Name or password is incorrect.';
+          err.classList.remove('hidden');
+          document.getElementById('lgPass').value = '';
+          setSyncState('ok');
+          return;
+        }
+      } else {
+        err.textContent = '📡 You are offline. Please connect to the internet for your first login on this device.';
+        err.classList.remove('hidden');
+        setSyncState('err');
+        return;
+      }
+    }
+
+    // ── ONLINE LOGIN: fetch from Supabase and cache users locally ──
     try {
       const users = await SB.select('users', 'active=eq.true');
-      const user = users.find(u => u.name.toLowerCase() === name.toLowerCase() && u.password === Auth.hash(pass));
-      if (!user) { err.textContent = 'Name or password is incorrect.'; err.classList.remove('hidden'); document.getElementById('lgPass').value = ''; setSyncState('ok'); return; }
+      // Cache users locally (hashed passwords only — safe to store)
+      this._cacheUsers(users);
+      const user = users.find(u => u.name.toLowerCase() === name.toLowerCase() && u.password === passHash);
+      if (!user) {
+        err.textContent = 'Name or password is incorrect.';
+        err.classList.remove('hidden');
+        document.getElementById('lgPass').value = '';
+        setSyncState('ok');
+        return;
+      }
       this.cu = user;
       sessionStorage.setItem('sb_uid', user.id);
       setSyncState('ok');
       this.startApp();
-    } catch(e) { err.textContent = 'Connection error: ' + e.message; err.classList.remove('hidden'); setSyncState('err'); }
+    } catch(e) {
+      // Network failed even though navigator.onLine was true — try cached anyway
+      const cached = this._getCachedUsers();
+      if (cached.length) {
+        const user = cached.find(u => u.name.toLowerCase() === name.toLowerCase() && u.password === passHash);
+        if (user) {
+          this.cu = user;
+          sessionStorage.setItem('sb_uid', user.id);
+          setSyncState('ok');
+          T.warn('📡 Using cached login — Supabase unreachable. Sales will queue offline.');
+          this.startApp();
+          return;
+        }
+      }
+      err.textContent = 'Connection error: ' + e.message + '. Check internet or try again.';
+      err.classList.remove('hidden');
+      setSyncState('err');
+    }
+  },
+
+  // Cache users list locally (only id, name, password hash, role — no sensitive data beyond what's needed)
+  _cacheUsers(users) {
+    try {
+      const safe = users.map(u => ({ id: u.id, name: u.name, password: u.password, role: u.role, active: u.active }));
+      localStorage.setItem('sb_users_cache', JSON.stringify(safe));
+    } catch(e) {}
+  },
+
+  _getCachedUsers() {
+    try {
+      const raw = localStorage.getItem('sb_users_cache');
+      return raw ? JSON.parse(raw) : [];
+    } catch(e) { return []; }
   },
 
   async authorizeDevice() {
@@ -2522,6 +2602,8 @@ async team(){
   try{
     const users=await SB.select('users','active=eq.true','name.asc');
     P._teamUsers=users;
+    // Keep login cache fresh whenever we load the team list
+    App._cacheUsers(users);
     const el=document.getElementById('teamCard');if(!el)return;
     el.innerHTML=!users.length?'<div class="empty"><p>No team members.</p></div>'
       :`<div class="tw"><table><thead><tr><th>Name</th><th>Role</th><th>Added</th><th>Actions</th></tr></thead><tbody>
