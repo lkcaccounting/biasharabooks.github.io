@@ -3060,8 +3060,11 @@ async payroll(){
     </div>
 
     <div class="alert a-info mb sm">
-      <strong>Kenya Payroll Deductions (2024):</strong>
-      PAYE (KRA bands) · NHIF: KSh 150–1,700 based on gross · NSSF: KSh 200 (Tier I) + 6% up to KSh 18,000 (Tier II)
+      <strong>Kenya Statutory Deductions (2026):</strong>
+      PAYE (5 KRA bands 10%–35%, personal relief KSh 2,400) &nbsp;&middot;&nbsp;
+      SHIF: 2.75% of gross &nbsp;&middot;&nbsp;
+      NSSF: 6% up to KSh 108,000 (max KSh 6,480) &nbsp;&middot;&nbsp;
+      AHL: 1.5% of gross
     </div>
 
     <div class="filter-bar">
@@ -3082,58 +3085,70 @@ async payroll(){
   await P.loadPayroll();
 },
 
-// Kenya PAYE bands 2024
-calcPAYE(gross){
-  // Monthly PAYE
-  let tax=0, remaining=gross;
+// ── KENYA PAYROLL RATES 2026 (Effective Feb 2026) ──
+// Sources: KRA, NSSF official notice, SHA Act
+// PAYE: 5 bands (Finance Act 2023, unchanged 2026)
+// SHIF: replaced NHIF — 2.75% of gross (Social Health Insurance Fund)
+// NSSF: 6% on Tier I (up to KSh 9,000) + Tier II (9,001–108,000), max KSh 6,480
+// AHL: Affordable Housing Levy 1.5% of gross (mandatory since July 2023)
+// Personal relief: KSh 2,400/month
+
+calcPAYE(taxableIncome){
+  // taxableIncome = gross - NSSF (NSSF reduces PAYE base)
+  let tax=0, rem=taxableIncome;
   // Band 1: 0 – 24,000 @ 10%
-  const b1=Math.min(remaining,24000); tax+=b1*0.10; remaining-=b1;
+  const b1=Math.min(rem,24000); tax+=b1*0.10; rem-=b1;
   // Band 2: 24,001 – 32,333 @ 25%
-  const b2=Math.min(remaining,8333); tax+=b2*0.25; remaining-=b2;
-  // Band 3: above 32,333 @ 30%
-  if(remaining>0) tax+=remaining*0.30;
-  // Personal relief: KSh 2,400/month
+  const b2=Math.min(rem,8333); tax+=b2*0.25; rem-=b2;
+  // Band 3: 32,334 – 500,000 @ 30%
+  const b3=Math.min(rem,467667); tax+=b3*0.30; rem-=b3;
+  // Band 4: 500,001 – 800,000 @ 32.5%
+  const b4=Math.min(rem,300000); tax+=b4*0.325; rem-=b4;
+  // Band 5: above 800,000 @ 35%
+  if(rem>0) tax+=rem*0.35;
+  // Personal relief KSh 2,400/month
   tax=Math.max(0, tax-2400);
   return Math.round(tax);
 },
 
-// Kenya NHIF 2024
-calcNHIF(gross){
-  if(gross<=5999) return 150;
-  if(gross<=7999) return 300;
-  if(gross<=11999) return 400;
-  if(gross<=14999) return 500;
-  if(gross<=19999) return 600;
-  if(gross<=24999) return 750;
-  if(gross<=29999) return 850;
-  if(gross<=34999) return 900;
-  if(gross<=39999) return 950;
-  if(gross<=44999) return 1000;
-  if(gross<=49999) return 1100;
-  if(gross<=59999) return 1200;
-  if(gross<=69999) return 1300;
-  if(gross<=79999) return 1400;
-  if(gross<=89999) return 1500;
-  if(gross<=99999) return 1600;
-  return 1700;
+// SHIF (Social Health Insurance Fund) — replaced NHIF from Oct 2023
+// Rate: 2.75% of gross salary (employee portion — employer also pays 1.375%)
+calcSHIF(gross){
+  return Math.round(gross*0.0275);
 },
 
-// Kenya NSSF 2024 (new rates)
+// Keep calcNHIF as alias for backwards compat on old payslips
+calcNHIF(gross){ return P.calcSHIF(gross); },
+
+// NSSF 2026 (Year 4 — effective Feb 2026)
+// Tier I: 6% of earnings up to LEL (KSh 9,000) → max KSh 540 employee
+// Tier II: 6% of earnings from LEL to UEL (KSh 9,001–108,000) → max KSh 5,940 employee
+// Total max employee contribution: KSh 6,480
 calcNSSF(gross){
-  // Tier I: 6% of gross up to KSh 7,000 (employee portion)
-  const tier1=Math.min(gross,7000)*0.06;
-  // Tier II: 6% of earnings between 7,001 and 36,000
-  const tier2=Math.max(0,Math.min(gross,36000)-7000)*0.06;
-  return Math.round(tier1+tier2);
+  const LEL=9000, UEL=108000;
+  // Tier I: 6% on first KSh 9,000
+  const tier1=Math.min(gross,LEL)*0.06;
+  // Tier II: 6% on earnings between KSh 9,001 and KSh 108,000
+  const tier2=Math.max(0,Math.min(gross,UEL)-LEL)*0.06;
+  return Math.round(Math.min(tier1+tier2, 6480)); // cap at KSh 6,480
+},
+
+// Affordable Housing Levy — 1.5% of gross (employee portion)
+calcAHL(gross){
+  return Math.round(gross*0.015);
 },
 
 calcNetSalary(basic, allowances=0){
   const gross=Number(basic)+Number(allowances);
-  const paye=P.calcPAYE(gross);
-  const nhif=P.calcNHIF(gross);
   const nssf=P.calcNSSF(gross);
-  const net=gross-paye-nhif-nssf;
-  return {gross,paye,nhif,nssf,net:Math.round(net)};
+  // NSSF reduces taxable income for PAYE
+  const taxable=Math.max(0, gross-nssf);
+  const paye=P.calcPAYE(taxable);
+  const shif=P.calcSHIF(gross); // SHIF on gross
+  const ahl=P.calcAHL(gross);   // AHL on gross
+  const totalDeductions=paye+shif+nssf+ahl;
+  const net=Math.round(gross-totalDeductions);
+  return {gross,paye,nhif:shif,shif,nssf,ahl,net};
 },
 
 async loadPayroll(){
@@ -3184,8 +3199,9 @@ async loadPayroll(){
               <th style="text-align:right">Allowances</th>
               <th style="text-align:right">Gross</th>
               <th style="text-align:right">PAYE</th>
-              <th style="text-align:right">NHIF</th>
+              <th style="text-align:right">SHIF</th>
               <th style="text-align:right">NSSF</th>
+              <th style="text-align:right">AHL</th>
               <th style="text-align:right">Net Pay</th>
               <th style="text-align:center">Status</th>
               <th>Actions</th>
@@ -3200,6 +3216,7 @@ async loadPayroll(){
               <td style="text-align:right;color:var(--red)">${App.fmt(r.paye)}</td>
               <td style="text-align:right;color:var(--red)">${App.fmt(r.nhif)}</td>
               <td style="text-align:right;color:var(--red)">${App.fmt(r.nssf)}</td>
+              <td style="text-align:right;color:var(--red)">${App.fmt(r.other_deductions||0)}</td>
               <td style="text-align:right;font-weight:700;color:var(--green)">${App.fmt(r.net_salary)}</td>
               <td style="text-align:center">
                 ${r.status==='paid'
@@ -3221,6 +3238,7 @@ async loadPayroll(){
               <td style="text-align:right;color:var(--red)">${App.fmt(records.reduce((s,r)=>s+Number(r.paye||0),0))}</td>
               <td style="text-align:right;color:var(--red)">${App.fmt(records.reduce((s,r)=>s+Number(r.nhif||0),0))}</td>
               <td style="text-align:right;color:var(--red)">${App.fmt(records.reduce((s,r)=>s+Number(r.nssf||0),0))}</td>
+              <td style="text-align:right;color:var(--red)">${App.fmt(records.reduce((s,r)=>s+Number(r.other_deductions||0),0))}</td>
               <td style="text-align:right;color:var(--green)">${App.fmt(records.reduce((s,r)=>s+Number(r.net_salary||0),0))}</td>
               <td colspan="2"></td>
             </tr>
@@ -3259,10 +3277,11 @@ async newPayrollRun(){
                 oninput="P._updatePayCalc(${i})" style="font-size:14px"/>
             </div>
           </div>
-          <div id="pr_calc_${i}" style="background:var(--bg2);border-radius:8px;padding:10px;font-size:12px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
+          <div id="pr_calc_${i}" style="background:var(--bg2);border-radius:8px;padding:10px;font-size:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:6px;text-align:center">
             <div><div style="color:var(--text3)">Gross</div><div style="font-weight:700">${App.fmt(calc.gross)}</div></div>
             <div><div style="color:var(--red)">PAYE</div><div style="font-weight:700;color:var(--red)">-${App.fmt(calc.paye)}</div></div>
-            <div><div style="color:var(--red)">NHIF+NSSF</div><div style="font-weight:700;color:var(--red)">-${App.fmt(calc.nhif+calc.nssf)}</div></div>
+            <div><div style="color:var(--red)">SHIF+NSSF</div><div style="font-weight:700;color:var(--red)">-${App.fmt((calc.shif||calc.nhif)+calc.nssf)}</div></div>
+            <div><div style="color:var(--red)">AHL</div><div style="font-weight:700;color:var(--red)">-${App.fmt(calc.ahl||0)}</div></div>
             <div><div style="color:var(--green)">NET PAY</div><div style="font-weight:700;color:var(--green)">${App.fmt(calc.net)}</div></div>
           </div>
           <input type="hidden" id="pr_eid_${i}" value="${e.id}"/>
@@ -3316,8 +3335,8 @@ async savePayroll(){
       await SB.insert('payroll',{
         id:SB.genId('PAY'),employee_id:eid,employee_name:ename,
         month,year:parseInt(year),basic_salary:basic,allowances:allow,
-        gross_salary:calc.gross,paye:calc.paye,nhif:calc.nhif,nssf:calc.nssf,
-        other_deductions:0,net_salary:calc.net,status:'draft',
+        gross_salary:calc.gross,paye:calc.paye,nhif:calc.shif||calc.nhif,nssf:calc.nssf,
+        other_deductions:calc.ahl||0,net_salary:calc.net,status:'draft',
         created_by:App.cu.name,created_at:new Date().toISOString()
       });
     }
@@ -3375,7 +3394,7 @@ _previewDeductions(){
   if(!el||!basic)return;
   const calc=P.calcNetSalary(basic,allow);
   el.style.display='block';
-  el.innerHTML=`<strong>Estimated monthly deductions:</strong> &nbsp; Gross: ${App.fmt(calc.gross)} &nbsp;|&nbsp; PAYE: <span style="color:var(--red)">${App.fmt(calc.paye)}</span> &nbsp;|&nbsp; NHIF: <span style="color:var(--red)">${App.fmt(calc.nhif)}</span> &nbsp;|&nbsp; NSSF: <span style="color:var(--red)">${App.fmt(calc.nssf)}</span> &nbsp;|&nbsp; <strong>NET: <span style="color:var(--green)">${App.fmt(calc.net)}</span></strong>`;
+  el.innerHTML=`<strong>Estimated monthly deductions:</strong> Gross: ${App.fmt(calc.gross)} &nbsp;|&nbsp; PAYE: <span style="color:var(--red)">${App.fmt(calc.paye)}</span> &nbsp;|&nbsp; SHIF: <span style="color:var(--red)">${App.fmt(calc.shif||calc.nhif)}</span> &nbsp;|&nbsp; NSSF: <span style="color:var(--red)">${App.fmt(calc.nssf)}</span> &nbsp;|&nbsp; AHL: <span style="color:var(--red)">${App.fmt(calc.ahl||0)}</span> &nbsp;|&nbsp; <strong>NET: <span style="color:var(--green)">${App.fmt(calc.net)}</span></strong>`;
 },
 
 _addEmp(){
@@ -3484,9 +3503,9 @@ printPayslip(id){
     <thead><tr><th>Statutory Deductions</th><th style="text-align:right">Amount (KSh)</th></tr></thead>
     <tbody>
       <tr><td>PAYE (Income Tax — KRA)</td><td class="deduction" style="text-align:right">( ${App.fmt(record.paye)} )</td></tr>
-      <tr><td>NHIF (Health Insurance)</td><td class="deduction" style="text-align:right">( ${App.fmt(record.nhif)} )</td></tr>
-      <tr><td>NSSF (Social Security)</td><td class="deduction" style="text-align:right">( ${App.fmt(record.nssf)} )</td></tr>
-      ${Number(record.other_deductions)>0?`<tr><td>Other Deductions</td><td class="deduction" style="text-align:right">( ${App.fmt(record.other_deductions)} )</td></tr>`:''}
+      <tr><td>SHIF (Social Health Insurance Fund)</td><td class="deduction" style="text-align:right">( ${App.fmt(record.nhif)} )</td></tr>
+      <tr><td>NSSF (Social Security — Tier I &amp; II)</td><td class="deduction" style="text-align:right">( ${App.fmt(record.nssf)} )</td></tr>
+      <tr><td>AHL (Affordable Housing Levy — 1.5%)</td><td class="deduction" style="text-align:right">( ${App.fmt(record.other_deductions||0)} )</td></tr>
     </tbody>
   </table>
   <table><tbody><tr class="net-row"><td>NET PAY</td><td style="text-align:right;font-size:18px;color:#1b4332">${App.fmt(record.net_salary)}</td></tr></tbody></table>
