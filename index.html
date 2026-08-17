@@ -875,6 +875,8 @@ const App = {
       create table if not exists devices(id text primary key, token text, authorized_at timestamptz default now(), ua text);
       create table if not exists suppliers(id text primary key, name text, contact_person text, phone text, email text, address text, notes text, active boolean default true, created_at timestamptz default now());
       create table if not exists payroll(id text primary key, employee_id text, employee_name text, month text, year integer, basic_salary numeric default 0, allowances numeric default 0, gross_salary numeric default 0, paye numeric default 0, nhif numeric default 0, nssf numeric default 0, other_deductions numeric default 0, net_salary numeric default 0, status text default 'draft', paid_at timestamptz, notes text, created_by text, created_at timestamptz default now());
+      create table if not exists transactions(id text primary key, type text, category text, amount numeric default 0, description text, payment_method text, reference text, recorded_by text, created_at timestamptz default now());
+      create table if not exists business_balance(key text primary key, value text);
     `;
     try {
       // Use Supabase REST SQL endpoint
@@ -1103,6 +1105,7 @@ const App = {
       {id:'team',ic:'👥',lbl:'Team',show:u.role==='owner'},
       {id:'suppliers',ic:'🚚',lbl:'Suppliers',show:u.role==='owner'},
       {id:'payroll',ic:'💼',lbl:'Payroll',show:u.role==='owner'},
+      {id:'finances',ic:'🏦',lbl:'Finances',show:u.role==='owner'},
       {id:'ai',ic:'🤖',lbl:'AI Accountant',show:u.role==='owner'},
       {id:'settings',ic:'⚙',lbl:'Settings',show:u.role==='owner'},
     ].forEach(p => {
@@ -1118,9 +1121,9 @@ const App = {
     this.currentPage = pg;
     document.querySelectorAll('.ni').forEach(e=>e.classList.remove('active'));
     const b=document.getElementById('nav_'+pg); if(b) b.classList.add('active');
-    document.getElementById('tbTitle').textContent={dashboard:'Dashboard',sales:'Sales',stock:'Stock',reports:'Reports',team:'Team',suppliers:'Suppliers',payroll:'Payroll',ai:'AI Accountant',settings:'Settings'}[pg]||pg;
+    document.getElementById('tbTitle').textContent={dashboard:'Dashboard',sales:'Sales',stock:'Stock',reports:'Reports',team:'Team',suppliers:'Suppliers',payroll:'Payroll',finances:'Finances',ai:'AI Accountant',settings:'Settings'}[pg]||pg;
     document.getElementById('mc').innerHTML='';
-    ({dashboard:P.dashboard,sales:P.sales,stock:P.stock,reports:P.reports,team:P.team,suppliers:P.suppliers,payroll:P.payroll,ai:P.ai,settings:P.settings}[pg]||P.dashboard)();
+    ({dashboard:P.dashboard,sales:P.sales,stock:P.stock,reports:P.reports,team:P.team,suppliers:P.suppliers,payroll:P.payroll,finances:P.finances,ai:P.ai,settings:P.settings}[pg]||P.dashboard)();
     if(window.innerWidth<=768) document.getElementById('sidebar').classList.remove('open');
   },
 
@@ -1145,6 +1148,15 @@ async dashboard() {
     <div class="pg-hd"><div><h2>Dashboard</h2><p id="dDate"></p></div>
       <div class="pg-act"><button class="btn btn-g btn-sm" onclick="App.nav('sales')">+ Record Sale</button></div></div>
     <div id="dAlerts"></div>
+    <div id="dBalance" class="card mb hidden" style="border:2px solid var(--green);padding:14px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)">Business Cash Position</div>
+          <div id="dBalVal" style="font-family:var(--fd);font-size:28px;font-weight:700;color:var(--green)">—</div>
+        </div>
+        <button class="btn btn-o btn-sm" onclick="App.nav('finances')">View Finances →</button>
+      </div>
+    </div>
     <div class="stats-grid" id="dStats">${[...Array(6)].map(()=>`<div class="sc"><div class="sc-val muted">—</div><div class="sc-lbl">Loading...</div></div>`).join('')}</div>
     <div class="g2">
       <div class="card"><div class="card-ttl">Recent Sales</div><div class="rl" id="dRecent"><p class="muted sm">Loading...</p></div></div>
@@ -1170,6 +1182,18 @@ async dashboard() {
       <div class="sc ${low.length?'red':''}"><div class="sc-ico">⚠</div><div class="sc-val">${low.length}</div><div class="sc-lbl">Low Stock</div></div>
       <div class="sc"><div class="sc-ico">📊</div><div class="sc-val">${sales.length}</div><div class="sc-lbl">Total Sales</div></div>`;
     if(low.length) document.getElementById('dAlerts').innerHTML=`<div class="alert a-warn mb">⚠ <strong>Low Stock:</strong> ${low.map(p=>`${p.name}(${p.quantity})`).join(', ')}</div>`;
+    // Show cached cash position on dashboard
+    try{
+      const bal=JSON.parse(localStorage.getItem('sb_balance_cache')||'{}');
+      if(bal.balance!==undefined){
+        const balCard=document.getElementById('dBalance');
+        const balVal=document.getElementById('dBalVal');
+        if(balCard) balCard.classList.remove('hidden');
+        if(balVal){balVal.textContent=App.fmt(bal.balance);balVal.style.color=bal.balance>=0?'var(--green)':'var(--red)';}
+      }
+      // Refresh in background
+      P.loadFinancesBalance().catch(()=>{});
+    }catch(ex){}
     const recentHTML=!sales.length?'<div class="empty"><p>No sales yet.</p></div>':sales.slice(0,8).map(s=>`<div class="ri"><div class="rdot sale"></div><div class="ri-meta"><strong>${s.product_name}</strong><span>${s.sold_by}·${App.ago(s.created_at)}·${s.payment_method}</span></div><div class="ri-amt">${App.fmt(s.total)}</div></div>`).join('');
     const payHTML=!Object.keys(payB).length?'<p class="muted sm">No data.</p>':Object.entries(payB).map(([m,v])=>`<div class="fb" style="padding:6px 0;border-bottom:1px solid var(--border)"><span>${App.payIco(m)} ${m}</span><strong>${App.fmt(v)}</strong></div>`).join('');
     const lowHTML=!low.length?'<div class="empty" style="padding:14px"><p>All stock OK ✓</p></div>':`<div class="rl">${low.map(p=>`<div class="ri"><div class="rdot low"></div><div class="ri-meta"><strong>${p.name}</strong><span>${p.quantity} left</span></div><span class="bdg bdg-red">${p.quantity}</span></div>`).join('')}</div>`;
@@ -2026,7 +2050,13 @@ async rRender(){
       const cogs=rstocks.reduce((s,x)=>s+Number(x.total_cost||0),0);
       const grossProfit=revenue-cogs;
       const totalPayroll=pays.reduce((s,x)=>s+Number(x.net_salary||0),0);
-      const operatingProfit=grossProfit-totalPayroll;
+      // Load extra expenses and income from transactions table
+      const txns=await SB.select('transactions','','created_at.desc').catch(()=>[]);
+      const filteredTxns=txns.filter(t=>filterDate(t.created_at));
+      const otherExpenses=filteredTxns.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
+      const otherIncome=filteredTxns.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
+      const expByCategory=filteredTxns.filter(t=>t.type==='expense').reduce((a,t)=>{a[t.category]=(a[t.category]||0)+Number(t.amount||0);return a;},{});
+      const operatingProfit=grossProfit-totalPayroll-otherExpenses+otherIncome;
       const periodLabel={month:'Monthly — '+now.toLocaleDateString('en-KE',{month:'long',year:'numeric'}),week:'Weekly — Last 7 Days',today:'Daily — '+now.toLocaleDateString('en-KE',{day:'numeric',month:'long',year:'numeric'}),all:'All Time'}[range];
       const rc=document.getElementById('rContent');
       rc.innerHTML=`
@@ -2047,13 +2077,17 @@ async rRender(){
             ${P.rptSummaryRow('Payroll (Net Salaries)',App.fmt(totalPayroll))}
             ${P.rptSummaryRow('Total Expenses',App.fmt(totalPayroll),true,'#b91c1c')}
             <div style="height:1px;background:#eee;margin:12px 0"></div>
-            ${P.rptSummaryRow('OPERATING PROFIT (EBIT)',App.fmt(operatingProfit),true,operatingProfit>=0?'#15803d':'#b91c1c')}
-            <div style="margin-top:14px;padding:12px;background:var(--${operatingProfit>=0?'green':'red'}-pale);border-radius:8px;text-align:center">
+            ${P.rptSummaryRow('Payroll (Net Salaries)',App.fmt(totalPayroll))}
+            ${Object.entries(expByCategory).map(([c,v])=>P.rptSummaryRow(c,App.fmt(v))).join('')}
+            ${P.rptSummaryRow('Total Operating Expenses',App.fmt(totalPayroll+otherExpenses),true,'#b91c1c')}
+            ${otherIncome>0?P.rptSummaryRow('Other Income (Loans, Investments etc.)',App.fmt(otherIncome),false,'#15803d'):''}
+            <div style="height:1px;background:#eee;margin:8px 0"></div>
+            ${P.rptSummaryRow('NET PROFIT / LOSS',App.fmt(operatingProfit),true,operatingProfit>=0?'#15803d':'#b91c1c')}
+            <div style="margin-top:14px;padding:12px;background:${operatingProfit>=0?'var(--green-pale)':'var(--red-pale)'};border-radius:8px;text-align:center">
               <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Net Profit / Loss</div>
               <div style="font-family:var(--fd);font-size:28px;font-weight:700;color:${operatingProfit>=0?'#15803d':'#b91c1c'}">${App.fmt(operatingProfit)}</div>
               <div style="font-size:11px;color:var(--text3);margin-top:4px">Gross margin: ${revenue>0?(grossProfit/revenue*100).toFixed(1):'0'}%</div>
             </div>
-            <div style="margin-top:12px;font-size:11px;color:#8c8880">Note: Add loan repayments, rent, utilities and other expenses manually to get a complete picture. This is based on data recorded in Smart Books only.</div>
           </div>
         </div>`;
       return;
@@ -2076,8 +2110,13 @@ async rRender(){
       const cashIn=sales.reduce((s,x)=>s+Number(x.total||0),0);
       const cashOutStock=rstocks.reduce((s,x)=>s+Number(x.total_cost||0),0);
       const cashOutPayroll=pays.reduce((s,x)=>s+Number(x.net_salary||0),0);
-      const totalOut=cashOutStock+cashOutPayroll;
-      const netCash=cashIn-totalOut;
+      const txns2=await SB.select('transactions','','created_at.desc').catch(()=>[]);
+      const ftxns=txns2.filter(t=>filterDate(t.created_at));
+      const otherExp=ftxns.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
+      const otherInc=ftxns.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
+      const totalIn=cashIn+otherInc;
+      const totalOut=cashOutStock+cashOutPayroll+otherExp;
+      const netCash=totalIn-totalOut;
       const periodLabel={month:'Monthly — '+now.toLocaleDateString('en-KE',{month:'long',year:'numeric'}),week:'Weekly — Last 7 Days',today:'Daily',all:'All Time'}[range];
       const rc=document.getElementById('rContent');
       rc.innerHTML=`
@@ -2085,13 +2124,15 @@ async rRender(){
         <div class="g2">
           <div class="card">
             <div style="font-size:13px;font-weight:700;color:#1b4332;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #15803d">CASH INFLOWS</div>
-            ${P.rptSummaryRow('Sales Revenue (all methods)',App.fmt(cashIn))}
-            ${P.rptSummaryRow('Total Cash In',App.fmt(cashIn),true,'#15803d')}
+            ${P.rptSummaryRow('Sales Revenue',App.fmt(cashIn))}
+            ${otherInc>0?P.rptSummaryRow('Other Income (Loans, Investments etc.)',App.fmt(otherInc),false,'#15803d'):''}
+            ${P.rptSummaryRow('Total Cash In',App.fmt(totalIn),true,'#15803d')}
           </div>
           <div class="card">
             <div style="font-size:13px;font-weight:700;color:#b91c1c;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #b91c1c">CASH OUTFLOWS</div>
             ${P.rptSummaryRow('Stock Purchases',App.fmt(cashOutStock))}
             ${P.rptSummaryRow('Payroll (paid only)',App.fmt(cashOutPayroll))}
+            ${otherExp>0?P.rptSummaryRow('Other Expenses (Rent, Utilities etc.)',App.fmt(otherExp),false,'#b91c1c'):''}
             ${P.rptSummaryRow('Total Cash Out',App.fmt(totalOut),true,'#b91c1c')}
           </div>
         </div>
@@ -2101,7 +2142,7 @@ async rRender(){
             <span style="font-family:var(--fd);font-size:28px;font-weight:700;color:${netCash>=0?'#15803d':'#b91c1c'}">${App.fmt(netCash)}</span>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px">
-            <div style="background:var(--green-pale);border-radius:8px;padding:12px;text-align:center"><div style="font-size:11px;color:var(--text3);text-transform:uppercase">Total In</div><div style="font-weight:700;color:#15803d">${App.fmt(cashIn)}</div></div>
+            <div style="background:var(--green-pale);border-radius:8px;padding:12px;text-align:center"><div style="font-size:11px;color:var(--text3);text-transform:uppercase">Total In</div><div style="font-weight:700;color:#15803d">${App.fmt(totalIn)}</div></div>
             <div style="background:var(--red-pale);border-radius:8px;padding:12px;text-align:center"><div style="font-size:11px;color:var(--text3);text-transform:uppercase">Total Out</div><div style="font-weight:700;color:#b91c1c">${App.fmt(totalOut)}</div></div>
             <div style="background:${netCash>=0?'var(--green-pale)':'var(--red-pale)'};border-radius:8px;padding:12px;text-align:center"><div style="font-size:11px;color:var(--text3);text-transform:uppercase">Net</div><div style="font-weight:700;color:${netCash>=0?'#15803d':'#b91c1c'}">${App.fmt(netCash)}</div></div>
           </div>
@@ -2741,6 +2782,349 @@ async markNotifsRead(){
     if(!readers.includes(uid)){readers.push(uid);await SB.update('notifications',`id=eq.${n.id}`,{read_by:readers.join(',')});}
   }
   Poller._last=0;document.getElementById('nBdg').textContent='0';M.close();T.ok('All read.');
+},
+
+
+// ─── FINANCES ───
+async finances(){
+  const mc=document.getElementById('mc');
+  mc.innerHTML=`
+    <div class="pg-hd">
+      <div><h2>Finances</h2><p>Expenses, other income and your total business cash position</p></div>
+      <div class="pg-act">
+        <button class="btn btn-p" onclick="P.newTransaction('expense')">+ Add Expense</button>
+        <button class="btn btn-g btn-sm" onclick="P.newTransaction('income')">+ Add Income</button>
+        <button class="btn btn-o btn-sm" onclick="P.setOpeningBalance()">Set Opening Balance</button>
+      </div>
+    </div>
+
+    <!-- CASH POSITION CARD -->
+    <div class="card mb" id="cashPositionCard" style="border:2px solid var(--green)">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)">Total Business Cash Position</div>
+          <div id="cashPositionVal" style="font-family:var(--fd);font-size:36px;font-weight:700;color:var(--green)">Loading...</div>
+          <div id="cashPositionBreak" style="font-size:12px;color:var(--text2);margin-top:4px"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;min-width:260px" id="cashMiniStats"></div>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <select id="finTab" onchange="P.loadFinances()" style="max-width:160px">
+        <option value="all">All Transactions</option>
+        <option value="expense">Expenses Only</option>
+        <option value="income">Other Income Only</option>
+      </select>
+      <select id="finRange" onchange="P.loadFinances()" style="max-width:145px">
+        <option value="month">This Month</option>
+        <option value="week">This Week</option>
+        <option value="today">Today</option>
+        <option value="all">All Time</option>
+      </select>
+      <input class="si" id="finSearch" placeholder="Search..." oninput="P.loadFinances()" style="max-width:200px"/>
+    </div>
+
+    <div class="card" id="finTable">
+      <div class="empty"><div class="spin" style="margin:0 auto"></div></div>
+    </div>`;
+
+  await P.loadFinancesBalance();
+  await P.loadFinances();
+},
+
+async loadFinancesBalance(){
+  try{
+    const [txns, allSales, restocks, payrolls] = await Promise.all([
+      SB.select('transactions','','created_at.desc').catch(()=>[]),
+      SB.select('sales','','created_at.desc').catch(()=>[]),
+      SB.select('restocks','','created_at.desc').catch(()=>[]),
+      SB.select('payroll','status=eq.paid','created_at.desc').catch(()=>[])
+    ]);
+
+    // Get opening balance
+    const openingRow = await SB.getConfig('opening_balance').catch(()=>null);
+    const openingBalance = parseFloat(openingRow||0);
+
+    // Calculate totals
+    const totalSales = allSales.reduce((s,x)=>s+Number(x.total||0),0);
+    const totalOtherIncome = txns.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
+    const totalStockCost = restocks.reduce((s,r)=>s+Number(r.total_cost||0),0);
+    const totalPayroll = payrolls.reduce((s,p)=>s+Number(p.net_salary||0),0);
+    const totalExpenses = txns.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
+
+    const totalIn = openingBalance + totalSales + totalOtherIncome;
+    const totalOut = totalStockCost + totalPayroll + totalExpenses;
+    const balance = totalIn - totalOut;
+
+    const biz = App.cfg?.business||{};
+    const el = document.getElementById('cashPositionVal');
+    const brk = document.getElementById('cashPositionBreak');
+    const mini = document.getElementById('cashMiniStats');
+    if(el) el.textContent = App.fmt(balance);
+    if(el) el.style.color = balance >= 0 ? 'var(--green)' : 'var(--red)';
+    if(brk) brk.innerHTML = `Opening Balance: ${App.fmt(openingBalance)} + Sales: ${App.fmt(totalSales)} + Other Income: ${App.fmt(totalOtherIncome)} − Stock: ${App.fmt(totalStockCost)} − Payroll: ${App.fmt(totalPayroll)} − Expenses: ${App.fmt(totalExpenses)}`;
+    if(mini) mini.innerHTML = `
+      <div style="background:var(--green-pale);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Total In</div>
+        <div style="font-weight:700;color:#15803d;font-size:14px">${App.fmt(totalIn)}</div>
+      </div>
+      <div style="background:var(--red-pale);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Total Out</div>
+        <div style="font-weight:700;color:var(--red);font-size:14px">${App.fmt(totalOut)}</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Expenses</div>
+        <div style="font-weight:700;font-size:14px">${App.fmt(totalExpenses)}</div>
+      </div>
+      <div style="background:var(--gold-pale);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase">Other Income</div>
+        <div style="font-weight:700;color:var(--gold);font-size:14px">${App.fmt(totalOtherIncome)}</div>
+      </div>`;
+    // Cache for dashboard
+    localStorage.setItem('sb_balance_cache', JSON.stringify({balance, totalIn, totalOut}));
+  }catch(e){
+    const el=document.getElementById('cashPositionVal');
+    if(el) el.textContent=navigator.onLine?'Error loading':'Offline';
+  }
+},
+
+async loadFinances(){
+  const tab=document.getElementById('finTab')?.value||'all';
+  const range=document.getElementById('finRange')?.value||'month';
+  const search=(document.getElementById('finSearch')?.value||'').toLowerCase();
+  const el=document.getElementById('finTable');if(!el)return;
+  el.innerHTML='<div class="empty"><div class="spin" style="margin:0 auto"></div></div>';
+
+  try{
+    let txns=await SB.select('transactions','','created_at.desc').catch(()=>[]);
+    const now=new Date();
+    // Date filter
+    txns=txns.filter(t=>{
+      const d=new Date(t.created_at);
+      if(range==='today') return d.toDateString()===now.toDateString();
+      if(range==='week'){const w=new Date(now);w.setDate(now.getDate()-7);return d>=w;}
+      if(range==='month') return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();
+      return true;
+    });
+    if(tab!=='all') txns=txns.filter(t=>t.type===tab);
+    if(search) txns=txns.filter(t=>(t.description||'').toLowerCase().includes(search)||(t.category||'').toLowerCase().includes(search));
+    P._txns=txns;
+
+    const totalExp=txns.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
+    const totalInc=txns.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
+
+    if(!txns.length){
+      el.innerHTML=`<div class="empty"><div class="ei">${tab==='expense'?'💸':'💰'}</div>
+        <p>No ${tab==='all'?'transactions':tab+' entries'} found.</p>
+        <div style="display:flex;gap:8px;justify-content:center;margin-top:12px">
+          <button class="btn btn-p btn-sm" onclick="P.newTransaction('expense')">+ Add Expense</button>
+          <button class="btn btn-g btn-sm" onclick="P.newTransaction('income')">+ Add Income</button>
+        </div></div>`;
+      return;
+    }
+
+    el.innerHTML=`
+      <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+        <div style="background:var(--red-pale);border-radius:8px;padding:10px 16px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase">Expenses (period)</div>
+          <div style="font-weight:700;color:var(--red)">${App.fmt(totalExp)}</div>
+        </div>
+        <div style="background:var(--green-pale);border-radius:8px;padding:10px 16px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase">Other Income (period)</div>
+          <div style="font-weight:700;color:#15803d">${App.fmt(totalInc)}</div>
+        </div>
+      </div>
+      <div class="tw">
+        <table>
+          <thead style="background:#1b4332;color:#fff">
+            <tr>
+              <th>Date</th><th>Type</th><th>Category</th><th>Description</th>
+              <th style="text-align:right">Amount</th>
+              <th>Payment</th><th>Reference</th><th>By</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${txns.map(t=>`<tr>
+              <td style="white-space:nowrap">${App.fmtD(t.created_at)}</td>
+              <td><span class="bdg ${t.type==='expense'?'bdg-red':'bdg-ok'}">${t.type==='expense'?'Expense':'Income'}</span></td>
+              <td><strong>${t.category||'—'}</strong></td>
+              <td>${t.description||'—'}</td>
+              <td style="text-align:right;font-weight:700;color:${t.type==='expense'?'var(--red)':'#15803d'}">
+                ${t.type==='expense'?'-':'+'} ${App.fmt(t.amount)}
+              </td>
+              <td>${t.payment_method||'—'}</td>
+              <td style="font-size:12px;color:var(--text3)">${t.reference||'—'}</td>
+              <td style="font-size:12px">${t.recorded_by||'—'}</td>
+              <td>
+                <button class="btn btn-o btn-sm" onclick="P.editTransaction('${t.id}')">Edit</button>
+                <button class="btn btn-d btn-sm" onclick="P.deleteTransaction('${t.id}')">Del</button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:var(--bg2);font-weight:700">
+              <td colspan="4" style="padding:10px 12px;text-align:right">TOTALS:</td>
+              <td style="text-align:right;padding:10px 12px">
+                <span style="color:var(--red)">-${App.fmt(totalExp)}</span>
+                ${totalInc>0?` / <span style="color:#15803d">+${App.fmt(totalInc)}</span>`:''}
+              </td>
+              <td colspan="4"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>`;
+  }catch(e){
+    el.innerHTML=`<div class="empty"><p>${navigator.onLine?'Error: '+e.message:'Offline — finance records need internet.'}</p></div>`;
+  }
+},
+
+_txns:[],
+
+newTransaction(type='expense'){
+  const expenseCategories=['Rent / Lease','Electricity / Water','Internet / Phone','Transport / Fuel','Repairs & Maintenance','Salaries & Wages','Stock Purchase','Marketing / Advertising','Loan Repayment','Owner Withdrawal (Drawings)','Bank Charges','Equipment Purchase','Insurance','Stationery & Office','Other Expense'];
+  const incomeCategories=['Business Loan','Owner Capital Injection','Investment Returns','Grant / Donation','Asset Sale','Refund / Rebate','Other Income'];
+  const cats = type==='expense' ? expenseCategories : incomeCategories;
+
+  M.open(type==='expense'?'Record Expense':'Record Other Income',`
+    <div class="fg">
+      <label>Category *</label>
+      <select id="txCat">
+        <option value="">— Select category —</option>
+        ${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}
+        <option value="__other__">Other (type below)</option>
+      </select>
+    </div>
+    <div class="fg" id="txCatOtherWrap" style="display:none">
+      <label>Custom Category</label>
+      <input type="text" id="txCatOther" placeholder="Enter category name"/>
+    </div>
+    <div class="fg">
+      <label>Description <span class="lh">(optional)</span></label>
+      <input type="text" id="txDesc" placeholder="e.g. July rent payment, Equity Bank loan disbursement"/>
+    </div>
+    <div class="g2">
+      <div class="fg">
+        <label>Amount (KSh) *</label>
+        <input type="number" id="txAmt" min="0" step="0.01" placeholder="0.00"/>
+      </div>
+      <div class="fg">
+        <label>Payment Method</label>
+        <select id="txPay">
+          <option>Cash</option><option>Mpesa</option><option>Bank</option>
+          <option>Cheque</option><option>Card</option><option>Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="fg">
+      <label>Reference / Receipt No. <span class="lh">(optional)</span></label>
+      <input type="text" id="txRef" placeholder="e.g. Receipt #1234, LPO-001"/>
+    </div>
+    <div class="fg">
+      <label>Date</label>
+      <input type="date" id="txDate" value="${new Date().toISOString().slice(0,10)}"/>
+    </div>
+    <script>
+      document.getElementById('txCat').onchange=function(){
+        document.getElementById('txCatOtherWrap').style.display=this.value==='__other__'?'block':'none';
+      };
+    </script>`,
+    [
+      {lbl:'Cancel',cls:'btn-o',fn:'M.close()'},
+      {lbl:`Save ${type==='expense'?'Expense':'Income'}`,cls:'btn-p',fn:`P.saveTransaction('${type}')`}
+    ]);
+},
+
+editTransaction(id){
+  const t=(P._txns||[]).find(x=>x.id===id);if(!t)return;
+  P.newTransaction(t.type);
+  setTimeout(()=>{
+    const cat=document.getElementById('txCat');
+    const desc=document.getElementById('txDesc');
+    const amt=document.getElementById('txAmt');
+    const pay=document.getElementById('txPay');
+    const ref=document.getElementById('txRef');
+    const date=document.getElementById('txDate');
+    if(cat){
+      const opt=[...cat.options].find(o=>o.value===t.category);
+      if(opt){cat.value=t.category;}
+      else{cat.value='__other__';document.getElementById('txCatOtherWrap').style.display='block';document.getElementById('txCatOther').value=t.category;}
+    }
+    if(desc) desc.value=t.description||'';
+    if(amt) amt.value=t.amount||'';
+    if(pay) pay.value=t.payment_method||'Cash';
+    if(ref) ref.value=t.reference||'';
+    if(date) date.value=(t.created_at||'').slice(0,10);
+    // Change save button to update
+    const btn=document.querySelector('#mFt .btn-p');
+    if(btn){btn.textContent='Update';btn.setAttribute('onclick',`P.saveTransaction('${t.type}','${id}')`);}
+  },100);
+},
+
+async saveTransaction(type,eid=null){
+  let cat=document.getElementById('txCat')?.value;
+  if(cat==='__other__') cat=document.getElementById('txCatOther')?.value.trim();
+  const desc=document.getElementById('txDesc')?.value.trim();
+  const amt=parseFloat(document.getElementById('txAmt')?.value)||0;
+  const pay=document.getElementById('txPay')?.value;
+  const ref=document.getElementById('txRef')?.value.trim();
+  const dateVal=document.getElementById('txDate')?.value;
+
+  if(!cat){return T.err('Select a category.');}
+  if(!amt||amt<=0){return T.err('Enter a valid amount.');}
+
+  const btn=document.querySelector('#mFt .btn-p');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+
+  const data={
+    type,category:cat,description:desc,amount:amt,
+    payment_method:pay,reference:ref,
+    recorded_by:App.cu.name,
+    created_at:dateVal?new Date(dateVal).toISOString():new Date().toISOString()
+  };
+
+  try{
+    if(eid){
+      await SB.update('transactions',`id=eq.${eid}`,data);
+      T.ok('Updated.');
+    } else {
+      await SB.insert('transactions',{...data,id:SB.genId('TX')});
+      T.ok(`${type==='expense'?'Expense':'Income'} recorded — ${App.fmt(amt)}`);
+    }
+    M.close();
+    await P.loadFinancesBalance();
+    await P.loadFinances();
+  }catch(e){
+    T.err('Error: '+e.message);
+    if(btn){btn.disabled=false;btn.textContent='Save';}
+  }
+},
+
+async deleteTransaction(id){
+  if(!confirm('Delete this transaction?'))return;
+  await SB.delete('transactions',`id=eq.${id}`);
+  T.ok('Deleted.');
+  await P.loadFinancesBalance();
+  await P.loadFinances();
+},
+
+async setOpeningBalance(){
+  const current=await SB.getConfig('opening_balance').catch(()=>null)||'0';
+  M.open('Set Opening Balance',`
+    <p class="muted sm mb">The opening balance is the amount of money the business had <strong>before you started using Smart Books</strong>. Set it once so your cash position is accurate from day one.</p>
+    <div class="fg">
+      <label>Opening Balance (KSh)</label>
+      <input type="number" id="obVal" value="${parseFloat(current).toFixed(2)}" min="0" step="0.01"/>
+      <small>Current: ${App.fmt(parseFloat(current))}. You can update this any time.</small>
+    </div>`,
+    [{lbl:'Cancel',cls:'btn-o',fn:'M.close()'},{lbl:'Save',cls:'btn-p',fn:'P.saveOpeningBalance()'}]);
+},
+
+async saveOpeningBalance(){
+  const val=parseFloat(document.getElementById('obVal')?.value)||0;
+  await SB.setConfig('opening_balance',String(val));
+  M.close();T.ok('Opening balance set to '+App.fmt(val));
+  await P.loadFinancesBalance();
 },
 
 // ─── AI (GROQ) ───
@@ -3766,6 +4150,7 @@ async runDbSetup(){
   const tables=[
     `create table if not exists suppliers(id text primary key, name text, contact_person text, phone text, email text, address text, notes text, active boolean default true, created_at timestamptz default now())`,
     `create table if not exists payroll(id text primary key, employee_id text, employee_name text, month text, year integer, basic_salary numeric default 0, allowances numeric default 0, gross_salary numeric default 0, paye numeric default 0, nhif numeric default 0, nssf numeric default 0, other_deductions numeric default 0, net_salary numeric default 0, status text default 'draft', paid_at timestamptz, notes text, created_by text, created_at timestamptz default now())`,
+    `create table if not exists transactions(id text primary key, type text, category text, amount numeric default 0, description text, payment_method text, reference text, recorded_by text, created_at timestamptz default now())`,
     `alter table sales add column if not exists invoice_number text`,
   ];
   let ok=0,fail=0;
@@ -3787,6 +4172,8 @@ async runDbSetup(){
       <textarea style="width:100%;margin-top:8px;font-size:11px;font-family:monospace;height:120px;padding:6px" readonly>
 create table if not exists suppliers(id text primary key, name text, contact_person text, phone text, email text, address text, notes text, active boolean default true, created_at timestamptz default now());
 create table if not exists payroll(id text primary key, employee_id text, employee_name text, month text, year integer, basic_salary numeric default 0, allowances numeric default 0, gross_salary numeric default 0, paye numeric default 0, nhif numeric default 0, nssf numeric default 0, other_deductions numeric default 0, net_salary numeric default 0, status text default 'draft', paid_at timestamptz, notes text, created_by text, created_at timestamptz default now());
+      create table if not exists transactions(id text primary key, type text, category text, amount numeric default 0, description text, payment_method text, reference text, recorded_by text, created_at timestamptz default now());
+      create table if not exists business_balance(key text primary key, value text);
 alter table sales add column if not exists invoice_number text;</textarea>`;
     }
   }
