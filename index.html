@@ -329,8 +329,20 @@ tr:last-child td{border-bottom:none}tbody tr:hover{background:var(--bg)}
 <div id="splash" class="splash">
   <div class="splash-ico">₦</div>
   <h1>Smart Books</h1>
-  <div class="spin"></div>
+  <div class="spin" id="splashSpin"></div>
   <p id="splashMsg">Starting up...</p>
+  <div id="splashHelp" style="display:none;margin-top:18px;text-align:center">
+    <p style="font-size:13px;opacity:.75;margin-bottom:12px;max-width:300px">
+      Taking too long? Your Supabase project may be paused.<br>
+      Free projects pause after 7 days of no activity.
+    </p>
+    <button onclick="App.splashBypass()" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff;padding:9px 20px;border-radius:8px;cursor:pointer;font-size:13px;font-family:inherit">
+      Enter credentials manually →
+    </button>
+    <button onclick="location.reload()" style="background:transparent;border:1px solid rgba(255,255,255,.25);color:rgba(255,255,255,.7);padding:9px 20px;border-radius:8px;cursor:pointer;font-size:13px;font-family:inherit;margin-left:8px">
+      Retry
+    </button>
+  </div>
 </div>
 
 <!-- SUPABASE CONNECT SCREEN -->
@@ -779,12 +791,25 @@ const Poller = {
 const App = {
   cu: null, cfg: null,
 
+  splashBypass() {
+    hideSplash();
+    show('connScreen');
+    CONN.prefill();
+  },
+
   async boot() {
     splash('Starting up...');
 
+    // Show help button after 5 seconds if still on splash
+    const helpTimer = setTimeout(() => {
+      const h = document.getElementById('splashHelp');
+      if (h) h.style.display = 'block';
+      splash('Still connecting — Supabase may be paused...');
+    }, 5000);
+
     // ── Step 1: Check Supabase credentials exist ──
     const sbCfg = CFG.get();
-    if (!sbCfg) { hideSplash(); show('connScreen'); return; }
+    if (!sbCfg) { clearTimeout(helpTimer); hideSplash(); show('connScreen'); return; }
     SB.init(sbCfg.url, sbCfg.key);
 
     // ── Step 2: Try ALL cache keys (handles renamed keys across versions) ──
@@ -805,11 +830,13 @@ const App = {
     }
 
     if (cachedCfg) {
+      clearTimeout(helpTimer);
       this.cfg = cachedCfg;
       hideSplash();
       this._showLogin(cachedCfg);
       // Refresh config silently in background
       this._refreshCfg().catch(() => {});
+      this._autoMigrate().catch(() => {});
       return;
     }
 
@@ -818,9 +845,10 @@ const App = {
     try {
       // 10 second timeout so it never hangs forever
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Connection timed out. Check your internet connection.')), 10000)
+        setTimeout(() => reject(new Error('Connection timed out after 8 seconds.')), 8000)
       );
       await Promise.race([this._refreshCfg(), timeoutPromise]);
+      clearTimeout(helpTimer);
 
       const c = this.cfg;
       const isSetup = c && (c.setup_done === 'true' || c.setup_done === true);
@@ -834,15 +862,18 @@ const App = {
         this._autoMigrate().catch(()=>{});
       }
     } catch(e) {
+      clearTimeout(helpTimer);
       hideSplash();
       show('connScreen');
       const errEl = document.getElementById('connErr');
       if (errEl) {
-        errEl.innerHTML = `<strong>Could not connect to your database.</strong><br>${e.message}<br><br>
-          <small>Check that:<br>
-          • Your internet is working<br>
-          • Your Supabase URL and key are correct<br>
-          • Your Supabase project is active (free projects pause after 1 week of inactivity)</small>`;
+        errEl.innerHTML = `<strong>Could not connect to your database.</strong><br>
+          <em style="font-size:12px">${e.message}</em><br><br>
+          <strong>Most likely cause:</strong> Your Supabase project is paused.<br>
+          Free projects pause after 7 days without any user activity.<br><br>
+          <strong>Fix:</strong> Go to <a href="https://supabase.com" target="_blank" style="color:var(--blue)">supabase.com</a> →
+          open your project → click <strong>Restore project</strong> → wait 2 minutes → come back and try again.<br><br>
+          <small>Other checks: internet connection working? Supabase URL and anon key still correct?</small>`;
         errEl.classList.remove('hidden');
       }
     }
