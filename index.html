@@ -1611,7 +1611,7 @@ downloadReceiptPDF(saleId){
     </div>
     <div style="margin-top:5px;font-size:11px;color:#5c584f">Served by: ${sale.sold_by}</div>
     <div class="ft">Thank you for your business!<br>${biz.name||''}${biz.phone?' — '+biz.phone:''}</div>
-    <script>window.onload=()=>window.print()<\/script>
+    
   </body></html>`;
   const w=window.open('','_blank','width=420,height=650');
   if(!w){T.err('Please allow popups to download PDF.');return;}
@@ -3020,7 +3020,7 @@ newTransaction(type='expense'){
   M.open(type==='expense'?'Record Expense':'Record Other Income',`
     <div class="fg">
       <label>Category *</label>
-      <select id="txCat">
+      <select id="txCat" onchange="document.getElementById('txCatOtherWrap').style.display=this.value==='__other__'?'block':'none'">
         <option value="">— Select category —</option>
         ${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}
         <option value="__other__">Other (type below)</option>
@@ -3055,11 +3055,7 @@ newTransaction(type='expense'){
       <label>Date</label>
       <input type="date" id="txDate" value="${new Date().toISOString().slice(0,10)}"/>
     </div>
-    <script>
-      document.getElementById('txCat').onchange=function(){
-        document.getElementById('txCatOtherWrap').style.display=this.value==='__other__'?'block':'none';
-      };
-    </script>`,
+`,
     [
       {lbl:'Cancel',cls:'btn-o',fn:'M.close()'},
       {lbl:`Save ${type==='expense'?'Expense':'Income'}`,cls:'btn-p',fn:`P.saveTransaction('${type}')`}
@@ -3932,9 +3928,14 @@ printPayslip(id){
     <div><div style="border-top:1px solid #1b4332;margin-top:30px;padding-top:4px;min-width:160px">Employee Signature</div></div>
     <div><div style="border-top:1px solid #1b4332;margin-top:30px;padding-top:4px;min-width:160px">Employer Signature & Stamp</div></div>
   </div>
-  <script>window.onload=()=>window.print()<\/script></body></html>`;
-  const w=window.open('','_blank','width=700,height:900');
-  w.document.write(html);w.document.close();
+  </body></html>`;
+  const w=window.open('','_blank','width=700,height=900');
+  if(!w){T.err('Allow popups to print payslip.');return;}
+  w.document.write(html);
+  w.document.close();
+  // Trigger print after content loads
+  w.addEventListener('load',()=>w.print());
+  setTimeout(()=>{ try{w.print();}catch(e){} },600);
 },
 
 printPayroll(){
@@ -4321,8 +4322,9 @@ printInv(saleId){
     <div class="cf"><table class="tot"><tr><td>Subtotal</td><td style="text-align:right">${b.currency||'KSh'} ${Number(sale.total).toFixed(2)}</td></tr><tr><td colspan="2" style="border-top:1px solid #ebe7de;padding:4px 0!important"></td></tr><tr><td class="tf">TOTAL</td><td class="tf" style="text-align:right">${b.currency||'KSh'} ${Number(sale.total).toFixed(2)}</td></tr></table></div>
     <div style="margin-top:28px"><div class="sl">Payment</div><div>Method: <span class="pb">${sale.payment_method}</span></div><div style="margin-top:6px;font-size:12px;color:#5c584f">Served by: ${sale.sold_by}</div></div>
     <div class="ft">Thank you for your business!<br>${b.name||''}${b.phone?' — '+b.phone:''}${b.address?' — '+b.address:''}</div>
-    <script>window.onload=()=>window.print()<\/script></body></html>`;
-    const w=window.open('','_blank','width=700,height=880');w.document.write(html);w.document.close();
+    </body></html>`;
+    const w=window.open('','_blank','width=700,height=880');
+    if(w){w.document.write(html);w.document.close();w.addEventListener('load',()=>w.print());setTimeout(()=>{try{w.print();}catch(e){}},600);}
   };
   if(s){doP(s);}else{SB.select('sales',`id=eq.${saleId}`).then(rows=>{if(rows.length)doP(rows[0]);else T.err('Sale not found.');});}
 }
