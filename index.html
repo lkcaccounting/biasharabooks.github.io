@@ -3215,7 +3215,7 @@ async aiSend(){
     const res=await fetch('https://api.groq.com/openai/v1/chat/completions',{
       method:'POST',
       headers:{'Authorization':`Bearer ${groqKey}`,'Content-Type':'application/json'},
-      body:JSON.stringify({model:'llama-3.3-70b-versatile',messages,max_tokens:700,temperature:0.7})
+      body:JSON.stringify({model:'qwen/qwen3.6-27b',messages,max_tokens:700,temperature:0.7})
     });
     const data=await res.json();
     document.getElementById(tid)?.remove();
@@ -4020,7 +4020,7 @@ async settings(){
           <div class="card-ttl">App Info</div>
           <div class="fb" style="padding:5px 0;border-bottom:1px solid var(--border)"><span class="muted">Version</span><span>Smart Books v5.0</span></div>
           <div class="fb" style="padding:5px 0;border-bottom:1px solid var(--border)"><span class="muted">Database</span><span>Supabase (PostgreSQL)</span></div>
-          <div class="fb" style="padding:5px 0;border-bottom:1px solid var(--border)"><span class="muted">AI</span><span>Groq — Llama 3 (free)</span></div>
+          <div class="fb" style="padding:5px 0;border-bottom:1px solid var(--border)"><span class="muted">AI</span><span>Groq — Qwen 3.6 27B (free)</span></div>
           <div class="fb" style="padding:5px 0;border-bottom:1px solid var(--border)"><span class="muted">This Device</span><span class="mono" style="font-size:10px">${Auth.deviceToken()}</span></div>
           <div id="devList" class="mt"></div>
           <button class="btn btn-o btn-sm mt" onclick="P.loadDevices()">View Linked Devices</button>
