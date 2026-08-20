@@ -3212,17 +3212,82 @@ async aiSend(){
   try{
     const sysProm=await P.aiSysProm();
     const messages=[{role:'system',content:sysProm},...P._aiMsgs.slice(-8)];
-    const res=await fetch('https://api.groq.com/openai/v1/chat/completions',{
-      method:'POST',
-      headers:{'Authorization':`Bearer ${groqKey}`,'Content-Type':'application/json'},
-      body:JSON.stringify({model:'qwen/qwen3.6-27b',messages,max_tokens:700,temperature:0.7})
-    });
-    const data=await res.json();
+    // Try models in order until one works
+    // Models in priority order — chat-optimised, no reasoning/thinking mode
+    const GROQ_MODELS = [
+      'meta-llama/llama-4-scout-17b-16e-instruct',
+      'meta-llama/llama-4-maverick-17b-128e-instruct',
+      'compound-beta',
+      'llama-3.1-8b-instant',
+      'gemma2-9b-it',
+    ];
+    let data = null, lastErr = '';
+    for (const model of GROQ_MODELS) {
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions',{
+          method:'POST',
+          headers:{'Authorization':`Bearer ${groqKey}`,'Content-Type':'application/json'},
+          body:JSON.stringify({model,messages,max_tokens:700,temperature:0.6,stream:false})
+        });
+        data = await res.json();
+        if (data.error) {
+          lastErr = data.error.message;
+          // If model not found or access denied, try next
+          if (data.error.code === 'model_not_found' ||
+              data.error.message?.includes('does not exist') ||
+              data.error.message?.includes('not have access') ||
+              data.error.message?.includes('decommissioned')) {
+            continue;
+          }
+          break; // Other errors — stop trying
+        }
+        break; // Success
+      } catch(fetchErr) {
+        lastErr = fetchErr.message;
+        break; // Network error — no point retrying
+      }
+    }
     document.getElementById(tid)?.remove();
-    if(data.error){P.aiAppend('bot','❌ '+data.error.message);}
-    else{
-      const reply=data.choices?.[0]?.message?.content||'No response.';
-      P._aiMsgs.push({role:'assistant',content:reply});P.aiAppend('bot',reply);
+    if(!data || data.error){
+      P.aiAppend('bot','❌ AI unavailable: '+(lastErr||'All models failed. Check your Groq API key in Settings → AI Accountant → API Key.'));
+    } else {
+      let reply = data.choices?.[0]?.message?.content || 'No response.';
+      // Strip reasoning/thinking content from models that show their work
+      // Method: find the last substantive paragraph after all the analysis
+      if(reply.indexOf('All constraints met') !== -1 ||
+         reply.indexOf('thinking process') !== -1 ||
+         reply.indexOf('Thinking Process') !== -1 ||
+         reply.indexOf('Draft Response') !== -1) {
+        // Split into paragraphs and take only clean ones
+        var paras = reply.split('\n\n');
+        var cleanParas = [];
+        for(var pi = 0; pi < paras.length; pi++) {
+          var para = paras[pi].trim();
+          var isReasoning = (
+            para.indexOf('All constraints met') !== -1 ||
+            para.indexOf('thinking process') !== -1 ||
+            para.indexOf('Thinking Process') !== -1 ||
+            para.indexOf('Draft Response') !== -1 ||
+            para.indexOf('Determine Response') !== -1 ||
+            para.indexOf('Check Against') !== -1 ||
+            para.indexOf('Analyze User Input') !== -1 ||
+            para.indexOf('Identify Key') !== -1 ||
+            (para.length > 2 && para[0] >= '1' && para[0] <= '9' && para[1] === '.')
+          );
+          if(!isReasoning && para.length > 15) cleanParas.push(para);
+        }
+        if(cleanParas.length > 0) reply = cleanParas[cleanParas.length - 1];
+      }
+      // Remove <think>...</think> blocks if present
+      var thinkStart = reply.indexOf('<think>');
+      var thinkEnd = reply.indexOf('</think>');
+      if(thinkStart !== -1 && thinkEnd !== -1) {
+        reply = reply.substring(0, thinkStart) + reply.substring(thinkEnd + 8);
+      }
+      reply = reply.trim();
+      if(!reply) reply = 'I could not generate a response. Please try again.';
+      P._aiMsgs.push({role:'assistant',content:reply});
+      P.aiAppend('bot',reply);
     }
   }catch(e){document.getElementById(tid)?.remove();P.aiAppend('bot','❌ Connection error: '+e.message);}
   P._aiLoading=false;const b2=document.getElementById('aiBtn');if(b2){b2.disabled=false;b2.textContent='Send';}
