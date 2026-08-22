@@ -214,6 +214,15 @@ tr:last-child td{border-bottom:none}tbody tr:hover{background:var(--bg)}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes slideUp{from{opacity:0;transform:translateY(13px)}to{opacity:1;transform:translateY(0)}}
 
+/* CONFIRM DIALOG */
+.confirm-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .15s ease}
+.confirm-box{background:var(--card);border-radius:14px;padding:28px 28px 20px;max-width:360px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,.2);animation:slideUp .2s ease;text-align:center}
+.confirm-ico{font-size:36px;margin-bottom:12px}
+.confirm-title{font-family:var(--fd);font-size:17px;color:var(--text);margin-bottom:8px;font-weight:700}
+.confirm-msg{font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:22px}
+.confirm-btns{display:flex;gap:10px;justify-content:center}
+.confirm-btns .btn{min-width:110px;justify-content:center}
+
 /* PAYMENT METHOD GRID */
 .pay-method-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:4px}
 .pm-opt{border:2px solid var(--border);border-radius:10px;padding:10px 6px;cursor:pointer;text-align:center;transition:all .18s;background:var(--card)}
@@ -529,6 +538,19 @@ create table if not exists purchase_orders(id text primary key, supplier_id text
 </div>
 
 <div id="toasts" class="toast-wrap"></div>
+
+<!-- CONFIRM DIALOG -->
+<div id="confirmOv" class="confirm-ov hidden" onclick="Confirm._bgClick(event)">
+  <div class="confirm-box">
+    <div class="confirm-ico" id="confirmIco">⚠️</div>
+    <div class="confirm-title" id="confirmTitle">Are you sure?</div>
+    <div class="confirm-msg" id="confirmMsg"></div>
+    <div class="confirm-btns">
+      <button class="btn btn-o" onclick="Confirm._cancel()">Cancel</button>
+      <button class="btn btn-d" id="confirmOkBtn" onclick="Confirm._ok()">Delete</button>
+    </div>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -1737,7 +1759,7 @@ doSendEmail(){
 },
 
 async delSale(id){
-  if(!confirm('Delete this sale?'))return;
+  if(!await Confirm.show({title:'Delete Sale',msg:'This sale record will be permanently removed.',okLabel:'Delete',ico:'🗑️'}))return;
   await SB.delete('sales',`id=eq.${id}`);T.ok('Sale deleted.');P.sales();
 },
 
@@ -1903,13 +1925,9 @@ async saveProd(eid=null){
         if(btn){btn.disabled=false;btn.textContent='Add Product';}
         M.close();
         // Offer to restock directly
-        setTimeout(()=>{
-          if(confirm(`"${name}" already exists with ${existingLocal.quantity} units.\n\nDo you want to ADD MORE STOCK to it instead?`)){
-            P._stProds=loaded;
-            P._rsProds=loaded;
-            P.newRestock(existingLocal.id);
-          }
-        },100);
+        Confirm.show({title:'Product Already Exists',msg:'"'+name+'" already exists with '+existingLocal.quantity+' units. Add more stock to it instead?',okLabel:'Add Stock',okClass:'btn-p',ico:'📦'}).then(yes=>{
+          if(yes){P._stProds=loaded;P._rsProds=loaded;P.newRestock(existingLocal.id);}
+        });
         return;
       }
       // Also check DB for safety
@@ -1918,11 +1936,9 @@ async saveProd(eid=null){
       if(dup){
         if(btn){btn.disabled=false;btn.textContent='Add Product';}
         M.close();
-        setTimeout(()=>{
-          if(confirm(`"${name}" already exists with ${dup.quantity} units.\n\nDo you want to ADD MORE STOCK to it instead?`)){
-            P._stProds=existing;P._rsProds=existing;P.newRestock(dup.id);
-          }
-        },100);
+        Confirm.show({title:'Product Already Exists',msg:'"'+name+'" already exists with '+dup.quantity+' units. Add more stock to it instead?',okLabel:'Add Stock',okClass:'btn-p',ico:'📦'}).then(yes=>{
+          if(yes){P._stProds=existing;P._rsProds=existing;P.newRestock(dup.id);}
+        });
         return;
       }
       await SB.insert('products',{...data,id:SB.genId('P'),active:true,total_sold:0});
@@ -1932,7 +1948,7 @@ async saveProd(eid=null){
   }catch(e){T.err('Error: '+e.message);if(btn){btn.disabled=false;btn.textContent='Save';}}
 },
 async delProd(id,name){
-  if(!confirm(`Delete "${name}"?`))return;
+  if(!await Confirm.show({title:'Delete Product',msg:`Remove "${name}" from your product list?`,okLabel:'Delete',ico:'🗑️'}))return;
   await SB.update('products',`id=eq.${id}`,{active:false});T.ok('Product removed.');P.stock();
 },
 
@@ -1960,7 +1976,7 @@ async mergeDuplicates(){
 },
 
 async doMerge(ids,qtys,solds){
-  if(!confirm(`Merge ${ids.length} products into one? The first product will keep all combined stock. The others will be deleted.`))return;
+  if(!await Confirm.show({title:'Merge Products',msg:`Merge ${ids.length} products into one? The first product keeps all combined stock. Others will be removed.`,okLabel:'Merge',okClass:'btn-p',ico:'🔀'}))return;
   const totalQty=qtys.reduce((a,q)=>a+Number(q),0);
   const totalSold=solds.reduce((a,s)=>a+Number(s),0);
   // Keep first, update with combined qty
@@ -2789,7 +2805,7 @@ async saveUser(eid=null){
 },
 
 async delUser(id,name){
-  if(!confirm(`Remove ${name}?`))return;
+  if(!await Confirm.show({title:'Remove Team Member',msg:`Remove ${name} from the team? They will no longer be able to log in.`,okLabel:'Remove',ico:'👤'}))return;
   await SB.update('users',`id=eq.${id}`,{active:false});T.ok('Removed.');P.team();
 },
 
@@ -3128,7 +3144,7 @@ async saveTransaction(type,eid=null){
 },
 
 async deleteTransaction(id){
-  if(!confirm('Delete this transaction?'))return;
+  if(!await Confirm.show({title:'Delete Transaction',msg:'This financial record will be permanently deleted.',okLabel:'Delete',ico:'🗑️'}))return;
   await SB.delete('transactions',`id=eq.${id}`);
   T.ok('Deleted.');
   await P.loadFinancesBalance();
@@ -3508,7 +3524,7 @@ async saveSupplier(eid=null){
 },
 
 async deleteSupplier(id,name){
-  if(!confirm(`Remove "${name}" from your suppliers?`))return;
+  if(!await Confirm.show({title:'Remove Supplier',msg:`Remove "${name}" from your supplier list?`,okLabel:'Remove',ico:'🚚'}))return;
   await SB.update('suppliers',`id=eq.${id}`,{active:false});
   T.ok('Supplier removed.');
   P.suppliers();
@@ -3794,7 +3810,12 @@ async savePayroll(){
     // Check for existing payroll this month
     const existing=await SB.select('payroll',`month=eq.${month}&year=eq.${year}`).catch(()=>[]);
     if(existing.length){
-      if(!confirm(`Payroll for this month already exists (${existing.length} records). Overwrite?`)){
+      const doOverwrite = await Confirm.show({
+        title:'Payroll Already Exists',
+        msg:`Payroll for this month already has ${existing.length} record${existing.length>1?'s':''}. Do you want to overwrite it?`,
+        okLabel:'Overwrite',okClass:'btn-d',ico:'⚠️'
+      });
+      if(!doOverwrite){
         if(btn){btn.disabled=false;btn.textContent='Save Payroll ✓';}
         return;
       }
@@ -3824,13 +3845,13 @@ async savePayroll(){
 },
 
 async markPaid(id){
-  if(!confirm('Mark this salary as paid?'))return;
+  if(!await Confirm.show({title:'Mark as Paid',msg:'Confirm this salary has been paid to the employee.',okLabel:'Mark Paid',okClass:'btn-p',ico:'💰'}))return;
   await SB.update('payroll',`id=eq.${id}`,{status:'paid',paid_at:new Date().toISOString()});
   T.ok('Marked as paid.');P.loadPayroll();
 },
 
 async deletePayroll(id){
-  if(!confirm('Delete this payroll record?'))return;
+  if(!await Confirm.show({title:'Delete Payroll Record',msg:'This payroll entry will be permanently deleted.',okLabel:'Delete',ico:'🗑️'}))return;
   await SB.delete('payroll',`id=eq.${id}`);T.ok('Deleted.');P.loadPayroll();
 },
 
@@ -4564,6 +4585,40 @@ const Offline = {
   },
 
   isOnline() { return navigator.onLine; }
+};
+
+// ══════════════════════════════════════════════════════
+//  CONFIRM DIALOG — replaces browser confirm() popups
+// ══════════════════════════════════════════════════════
+const Confirm = {
+  _resolve: null,
+
+  show({ title='Are you sure?', msg='', okLabel='Delete', okClass='btn-d', ico='🗑️' } = {}) {
+    return new Promise(resolve => {
+      this._resolve = resolve;
+      document.getElementById('confirmTitle').textContent = title;
+      document.getElementById('confirmMsg').textContent = msg;
+      document.getElementById('confirmIco').textContent = ico;
+      const okBtn = document.getElementById('confirmOkBtn');
+      okBtn.textContent = okLabel;
+      okBtn.className = 'btn ' + okClass;
+      document.getElementById('confirmOv').classList.remove('hidden');
+    });
+  },
+
+  _ok() {
+    document.getElementById('confirmOv').classList.add('hidden');
+    if (this._resolve) { this._resolve(true); this._resolve = null; }
+  },
+
+  _cancel() {
+    document.getElementById('confirmOv').classList.add('hidden');
+    if (this._resolve) { this._resolve(false); this._resolve = null; }
+  },
+
+  _bgClick(e) {
+    if (e.target === document.getElementById('confirmOv')) this._cancel();
+  }
 };
 
 // ══════════════════════════════════════════════════════
